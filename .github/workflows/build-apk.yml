@@ -23,13 +23,20 @@ jobs:
       - name: Compilar o APK
         run: |
           set -o pipefail
-          buildozer -v android debug 2>&1 | tee build.log
+          buildozer -v android debug 2>&1 | tee build.log || {
+            echo "Primeira tentativa falhou. Criando atalho do longintrepr.h e tentando de novo..."
+            for d in $(find .buildozer -type d -path "*android-root/include/python3.11" 2>/dev/null); do
+              printf '#include "cpython/longintrepr.h"\n' > "$d/longintrepr.h"
+              echo "atalho criado em $d"
+            done
+            buildozer -v android debug 2>&1 | tee -a build.log
+          }
 
       - name: MOSTRAR O ERRO (só se falhou)
         if: failure()
         run: |
           echo "===== LINHAS COM ERRO ====="
-          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | tail -40
+          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | grep -v "print-multi-os-directory" | tail -40
           echo "===== FINAL DO LOG ====="
           tail -n 70 build.log
 
