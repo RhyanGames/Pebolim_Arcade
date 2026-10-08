@@ -1,0 +1,25 @@
+name: Gerar APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar o APK com o Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          workdir: pebolim
+          command: buildozer android debug
+          buildozer_version: stable
+
+      - name: Guardar o APK para baixar
+        uses: actions/upload-artifact@v4
+        with:
+          name: pebolim-apk
+          path: pebolim/bin/*.apk
