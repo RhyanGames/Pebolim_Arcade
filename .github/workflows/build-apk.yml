@@ -20,25 +20,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer cython==0.29.36 virtualenv
 
+      - name: Preparar o python-for-android com pygame 2.2.0
+        run: |
+          git clone --depth 1 https://github.com/kivy/python-for-android.git /tmp/p4a
+          sed -i -E "s/version = ['\"]2\.1\.0['\"]/version = '2.2.0'/" /tmp/p4a/pythonforandroid/recipes/pygame/__init__.py
+          echo "--- versão do pygame na receita:"
+          grep -n "version" /tmp/p4a/pythonforandroid/recipes/pygame/__init__.py
+          sed -i '/^p4a.bootstrap/a p4a.source_dir = /tmp/p4a' buildozer.spec
+          echo "--- linhas p4a do buildozer.spec:"
+          grep -n "p4a" buildozer.spec
+
       - name: Compilar o APK
         run: |
           set -o pipefail
-          buildozer -v android debug 2>&1 | tee build.log || {
-            echo "Primeira tentativa falhou. Criando atalho do longintrepr.h e tentando de novo..."
-            for d in $(find .buildozer -type d -path "*android-root/include/python3.11" 2>/dev/null); do
-              printf '#include "cpython/longintrepr.h"\n' > "$d/longintrepr.h"
-              echo "atalho criado em $d"
-            done
-            buildozer -v android debug 2>&1 | tee -a build.log
-          }
+          buildozer -v android debug 2>&1 | tee build.log
 
       - name: MOSTRAR O ERRO (só se falhou)
         if: failure()
         run: |
           echo "===== LINHAS COM ERRO ====="
-          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | grep -v "print-multi-os-directory" | tail -40
+          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | grep -v "print-multi-os-directory" | cut -c1-300 | tail -40
           echo "===== FINAL DO LOG ====="
-          tail -n 70 build.log
+          tail -n 70 build.log | cut -c1-300
 
       - name: Guardar o log completo
         if: always()
