@@ -21,7 +21,24 @@ jobs:
           pip install buildozer cython==0.29.36 virtualenv
 
       - name: Compilar o APK
-        run: buildozer -v android debug
+        run: |
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee build.log
+
+      - name: MOSTRAR O ERRO (só se falhou)
+        if: failure()
+        run: |
+          echo "===== LINHAS COM ERRO ====="
+          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | tail -40
+          echo "===== FINAL DO LOG ====="
+          tail -n 70 build.log
+
+      - name: Guardar o log completo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Guardar o APK para baixar
         uses: actions/upload-artifact@v4
