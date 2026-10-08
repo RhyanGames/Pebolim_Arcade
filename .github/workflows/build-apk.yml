@@ -21,11 +21,10 @@ jobs:
           pip install buildozer cython==0.29.36 virtualenv
 
       - name: Compilar o APK
-        working-directory: pebolim
         run: buildozer -v android debug
 
       - name: Guardar o APK para baixar
         uses: actions/upload-artifact@v4
         with:
           name: pebolim-apk
-          path: pebolim/bin/*.apk
+          path: bin/*.apk
