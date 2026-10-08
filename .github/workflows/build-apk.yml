@@ -2,8 +2,6 @@ name: Gerar APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 jobs:
   build:
@@ -11,12 +9,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compilar o APK com o Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
+      - uses: actions/setup-python@v5
         with:
-          workdir: pebolim
-          command: buildozer android debug
-          buildozer_version: stable
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev build-essential
+          python -m pip install --upgrade pip
+          pip install buildozer cython==0.29.36 virtualenv
+
+      - name: Compilar o APK
+        working-directory: pebolim
+        run: buildozer -v android debug
 
       - name: Guardar o APK para baixar
         uses: actions/upload-artifact@v4
