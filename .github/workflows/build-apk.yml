@@ -13,21 +13,28 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Usar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Instalar dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev build-essential
+          sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev build-essential
           python -m pip install --upgrade pip
           pip install buildozer cython==0.29.36 virtualenv
+          echo "Java em uso:"
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
 
       - name: Preparar o python-for-android com pygame 2.2.0
         run: |
           git clone --depth 1 https://github.com/kivy/python-for-android.git /tmp/p4a
           sed -i -E "s/version = ['\"]2\.1\.0['\"]/version = '2.2.0'/" /tmp/p4a/pythonforandroid/recipes/pygame/__init__.py
-          echo "--- versão do pygame na receita:"
           grep -n "version" /tmp/p4a/pythonforandroid/recipes/pygame/__init__.py
-          sed -i '/^p4a.bootstrap/a p4a.source_dir = /tmp/p4a' buildozer.spec
-          echo "--- linhas p4a do buildozer.spec:"
+          grep -q "p4a.source_dir" buildozer.spec || sed -i '/^p4a.bootstrap/a p4a.source_dir = /tmp/p4a' buildozer.spec
           grep -n "p4a" buildozer.spec
 
       - name: Compilar o APK
@@ -38,10 +45,10 @@ jobs:
       - name: MOSTRAR O ERRO (só se falhou)
         if: failure()
         run: |
+          echo "===== CAUSA DO GRADLE ====="
+          grep -n -A 20 "What went wrong" build.log | cut -c1-300 | head -60
           echo "===== LINHAS COM ERRO ====="
-          grep -n -E "error:|Command failed|FAILED|No such file|undefined reference|Traceback" build.log | grep -v "Werror" | grep -v "print-multi-os-directory" | cut -c1-300 | tail -40
-          echo "===== FINAL DO LOG ====="
-          tail -n 70 build.log | cut -c1-300
+          grep -n -E "error:|Command failed|FAILED|No such file|Traceback" build.log | grep -v "Werror" | grep -v "print-multi-os-directory" | cut -c1-300 | tail -20
 
       - name: Guardar o log completo
         if: always()
