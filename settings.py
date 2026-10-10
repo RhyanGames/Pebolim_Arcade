@@ -10,9 +10,9 @@ ANDROID = "ANDROID_ARGUMENT" in os.environ or ("ANDROID_ROOT" in os.environ and 
 MOBILE = ANDROID or ("--touch" in sys.argv) or os.environ.get("PEBOLIM_TOUCH") == "1"
 PAD = 200 if MOBILE else 0                 # painéis de controle dos lados do campo (só no modo toque)
 LW, LH = WIDTH + 2 * PAD, HEIGHT           # tamanho total da tela lógica
-FPS = 60
+FPS = 120
 TITLE = "Pebolim Arcade"
-VERSION = "0.1.1"
+VERSION = "0.1.3"
 CREDIT = "By Rhyan (EsnorQGames)"
 
 
@@ -73,8 +73,8 @@ SUBSTEPS = 4              # máximo de passos de física por quadro
 SUBSTEP_PX = 6.0          # passos adaptativos: ~1 passo a cada 6 px que a bola anda
 SUBSTEPS_MIN = 2
 BALL_RESTITUTION = 0.15   # quique da bola nos bonecos (baixo: a bola "morre" no boneco)
-IDLE_NUDGE_TIME = 5.0     # bola parada por tanto tempo (s) = ela se mexe sozinha
-IDLE_NUDGE_SPEED = 280.0  # velocidade do empurrãozinho
+IDLE_NUDGE_TIME = 3.0     # bola parada por tanto tempo (s) = ela se mexe sozinha
+IDLE_NUDGE_SPEED = 300.0  # velocidade do empurrãozinho
 IDLE_SPEED = 25.0         # abaixo disso (px/s) a bola é considerada parada
 
 # ---- "Cola": a bola gruda no boneco quando encosta devagar e vai junto com a haste ----
@@ -90,8 +90,8 @@ EARLY_CLINCH = True   # encerra a partida se um jogador já garantiu a maioria d
 GOALIE_INSET = 20     # distância do goleiro até a linha de fundo (px)
 
 # ---- Campo curvado (cuia): a bola é puxada de leve para o centro e nunca fica parada nas bordas ----
-CURVE_KX = 0.16       # aceleração (px/s² por px de distância do centro) no eixo X
-CURVE_KY = 0.25       # idem no eixo Y
+CURVE_KX = 0.17       # aceleração (px/s² por px de distância do centro) no eixo X
+CURVE_KY = 0.28       # idem no eixo Y
 
 # ---- Controle de bola (C = Player 1 | SHIFT = Player 2) ----
 CONTROL_MAX_SPEED = 450.0   # só dá para controlar se a bola estiver de lenta até média
