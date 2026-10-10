@@ -25,8 +25,13 @@ KICK_KEYS = (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_RCTRL)
 
 class App:
     def __init__(self):
+        try:                                        # ícone da janela (PC)
+            pygame.display.set_icon(pygame.image.load(resource_path("assets/icon_64.png")))
+        except Exception:
+            pass
         self.window = None
         self.manual_scale = False
+        self._scaled = None
         if MOBILE:      # tela lógica LWxLH (painéis de toque + campo); SCALED ajusta ao tamanho do celular
             flags = pygame.SCALED | (pygame.FULLSCREEN if ANDROID else 0)
             try:
@@ -399,15 +404,20 @@ class App:
 
     def draw(self):
         if MOBILE:
-            self.screen.fill(BG)
+            playing = self.state == "game" and not self.paused
+            if not playing:                          # em jogo os painéis/campo cobrem tudo: não precisa limpar
+                self.screen.fill(self.menu.pad_color if self.state == "menu" else BG)
             self.draw_view(self.view)
-            if self.state == "game" and not self.paused:
+            if playing:
                 self.touch.draw(self.screen, self.match, 1 if self.role == "client" else 0)
             if self.manual_scale:
                 sc, ox, oy = self.letterbox()
-                self.window.fill((0, 0, 0))
                 size = (max(1, int(LW * sc)), max(1, int(LH * sc)))
-                self.window.blit(pygame.transform.scale(self.screen, size), (int(ox), int(oy)))
+                if self._scaled is None or self._scaled.get_size() != size:
+                    self._scaled = pygame.Surface(size)          # reaproveitado a cada quadro
+                    self.window.fill((0, 0, 0))
+                pygame.transform.scale(self.screen, size, self._scaled)
+                self.window.blit(self._scaled, (int(ox), int(oy)))
         else:
             self.draw_view(self.screen)
 

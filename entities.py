@@ -28,7 +28,16 @@ class Ball:
     def place(self, x, y):
         self.x, self.y = float(x), float(y)
         self.vx = self.vy = 0.0
-        self.stuck = 0.0
+        self.idle = 0.0                 # tempo (s) praticamente parada
+        self.glue = None                # {"rod", "i", "rel", "slip", "t"} quando grudada num boneco
+        self.glue_cd = 0.0
+
+    def unglue(self, vx=0.0, vy=0.0, cooldown=GLUE_COOLDOWN):
+        """Solta a bola do boneco (a bola sai com a velocidade dada)."""
+        if self.glue is not None:
+            self.glue = None
+            self.vx, self.vy = vx, vy
+            self.glue_cd = cooldown
 
     @property
     def speed(self):
@@ -185,48 +194,64 @@ class Rod:
 
     # ---------- colisão com a bola ----------
     def collide(self, ball):
-        """Retorna 0 (nada), 1 (toque) ou 2 (chute)."""
+        """Retorna 0 (nada), 1 (toque) ou 2 (chute).
+        Toque devagar na frente do boneco = a bola GRUDA (cola); senão ela quase não quica."""
         result = 0
-        for fx, fy, w, h in self.rects():
-            left, right = fx - w / 2, fx + w / 2
-            top, bot = fy - h / 2, fy + h / 2
-            cx = max(left, min(ball.x, right))
-            cy = max(top, min(ball.y, bot))
-            dx, dy = ball.x - cx, ball.y - cy
-            d2 = dx * dx + dy * dy
-            if d2 >= ball.r * ball.r:
-                continue
-            if d2 > 1e-9:
-                d = math.sqrt(d2)
-                nx, ny, pen = dx / d, dy / d, ball.r - d
-            else:  # centro da bola dentro do retângulo
-                cands = [(ball.x - left, -1, 0), (right - ball.x, 1, 0),
-                         (ball.y - top, 0, -1), (bot - ball.y, 0, 1)]
-                m = min(cands, key=lambda c: c[0])
-                nx, ny, pen = m[1], m[2], m[0] + ball.r
-            ball.x += nx * pen
-            ball.y += ny * pen
+        for i in range(self.n):
+            for fx, fy, w, h in self.parts(i):
+                left, right = fx - w / 2, fx + w / 2
+                top, bot = fy - h / 2, fy + h / 2
+                cx = max(left, min(ball.x, right))
+                cy = max(top, min(ball.y, bot))
+                dx, dy = ball.x - cx, ball.y - cy
+                d2 = dx * dx + dy * dy
+                if d2 >= ball.r * ball.r:
+                    continue
+                if d2 > 1e-9:
+                    d = math.sqrt(d2)
+                    nx, ny, pen = dx / d, dy / d, ball.r - d
+                else:  # centro da bola dentro do retângulo
+                    cands = [(ball.x - left, -1, 0), (right - ball.x, 1, 0),
+                             (ball.y - top, 0, -1), (bot - ball.y, 0, 1)]
+                    m = min(cands, key=lambda c: c[0])
+                    nx, ny, pen = m[1], m[2], m[0] + ball.r
+                ball.x += nx * pen
+                ball.y += ny * pen
 
-            if self.state == SWING and not self.kick_applied and nx * self.dir > 0.25:
-                sp = KICK_SPEED[self.level]
-                if self.aim is not None:        # bola controlada: o jogador escolheu a direção
-                    ball.vx = self.dir * math.cos(self.aim) * sp
-                    ball.vy = math.sin(self.aim) * sp
+                if self.state == SWING and not self.kick_applied and nx * self.dir > 0.25:
+                    sp = KICK_SPEED[self.level]
+                    if self.aim is not None:        # bola controlada: o jogador escolheu a direção
+                        ball.vx = self.dir * math.cos(self.aim) * sp
+                        ball.vy = math.sin(self.aim) * sp
+                    else:
+                        rel = max(-1.0, min(1.0, (ball.y - fy) / (h / 2)))
+                        vx = self.dir * sp
+                        vy = rel * sp * 0.30 + self.vy * 0.5
+                        n = math.hypot(vx, vy)
+                        ball.vx, ball.vy = vx / n * sp, vy / n * sp
+                    self.kick_applied = True
+                    result = 2
                 else:
-                    rel = max(-1.0, min(1.0, (ball.y - fy) / (h / 2)))
-                    vx = self.dir * sp
-                    vy = rel * sp * 0.30 + self.vy * 0.5
-                    n = math.hypot(vx, vy)
-                    ball.vx, ball.vy = vx / n * sp, vy / n * sp
-                self.kick_applied = True
-                result = 2
-            else:
-                rvx, rvy = ball.vx - self.foot_vx, ball.vy - self.vy
-                vn = rvx * nx + rvy * ny
-                if vn < 0:
-                    e = 0.55
-                    rvx -= (1 + e) * vn * nx
-                    rvy -= (1 + e) * vn * ny
-                    ball.vx, ball.vy = rvx + self.foot_vx, rvy + self.vy
-                    result = max(result, 1)
+                    rvx, rvy = ball.vx - self.foot_vx, ball.vy - self.vy
+                    vn = rvx * nx + rvy * ny
+                    if vn < 0:
+                        if (ball.glue is None and ball.glue_cd <= 0 and self.state in (IDLE, CHARGING)
+                                and nx * self.dir > 0.5 and -vn <= GLUE_MAX_REL):
+                            # encostou devagar na frente do boneco: gruda
+                            lim = self.fig_h / 2 - 2
+                            rel = max(-lim, min(lim, ball.y - (self.base_y(i) + self.offset)))
+                            ball.glue = {"rod": self, "i": i, "rel": rel, "slip": 0.0, "t": 0.0}
+                            ball.vx = ball.vy = 0.0
+                        else:
+                            e = BALL_RESTITUTION
+                            rvx -= (1 + e) * vn * nx
+                            rvy -= (1 + e) * vn * ny
+                            ball.vx, ball.vy = rvx + self.foot_vx, rvy + self.vy
+                        result = max(result, 1)
         return result
+
+    # ---------- cola ----------
+    def glue_pos(self, g):
+        """Posição da bola grudada: na frente do corpo do boneco."""
+        return (self.x + self.foot + self.dir * (FIG_W / 2 + BALL_R - 1),
+                self.base_y(g["i"]) + self.offset + g["rel"])

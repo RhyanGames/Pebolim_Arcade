@@ -70,6 +70,9 @@ class Match:
         self._touch_cd = self._wall_cd = 0.0
         self._last_count = None
 
+        self._sprites = {}
+        self._hud_key = self._hud_surf = None
+        self._round_ov = None
         self.table = self._build_table()
         self.zones = [self._build_zones(t) for t in (0, 1)]
         self.zone_surfs = []
@@ -78,12 +81,14 @@ class Match:
             for x0, x1, _rod in self.zones[t]:
                 z = pygame.Surface((int(x1 - x0), FIELD_H), pygame.SRCALPHA)
                 z.fill((*TEAM_COLORS[t], 38))
+                z = z.convert_alpha() if pygame.display.get_surface() else z
                 lst.append(z)
             self.zone_surfs.append(lst)
         self.bands = []
         for t in (0, 1):
             s = pygame.Surface((32, FIELD_H), pygame.SRCALPHA)
             s.fill((*TEAM_COLORS[t], 55))
+            s = s.convert_alpha() if pygame.display.get_surface() else s
             self.bands.append(s)
         self.reset_table(server=0, countdown=3.45)
 
@@ -275,6 +280,7 @@ class Match:
         half = rod.fig_h / 2
         rel = max(-half, min(half, b.y - (rod.base_y(i) + rod.offset)))
         self.ctrl[t] = {"rod": rod, "i": i, "aim": 0.0, "t": 0.0, "rel": rel}
+        b.glue = None
         b.vx = b.vy = 0.0
         rod.move = 0.0
         self.sfx("touch")
@@ -405,17 +411,57 @@ class Match:
                 b.vx = sign * abs(b.vx) * 0.3
         return impact
 
+    def _glue_step(self, sub):
+        """Bola grudada: acompanha o boneco; se a haste mexer demais, ela escapa. True = continua grudada."""
+        b = self.ball
+        g = b.glue
+        rod = g["rod"]
+        if rod.state not in (IDLE, CHARGING):          # o boneco vai chutar: solta e a colisão do chute age
+            b.unglue(0.0, 0.0, 0.0)
+            return False
+        g["t"] += sub
+        if g["t"] > GLUE_MAX_TIME:                     # ficou tempo demais: empurrãozinho para frente
+            b.unglue(rod.dir * 160.0, 0.0)
+            return False
+        speed = abs(rod.vy)
+        if speed > GLUE_FREE_SPEED:
+            g["slip"] += (speed - GLUE_FREE_SPEED) / (ROD_SPEED - GLUE_FREE_SPEED) * sub / GLUE_SLIP_TIME
+        else:
+            g["slip"] = max(0.0, g["slip"] - 1.5 * sub / GLUE_SLIP_TIME)
+        if g["slip"] >= 1.0:                           # mexeu demais: a bola escapa (fica para trás)
+            b.unglue(rod.dir * 70.0, rod.vy * 0.4)
+            return False
+        b.x, b.y = rod.glue_pos(g)
+        b.vx, b.vy = 0.0, rod.vy
+        return True
+
     def physics(self, dt, allow_goal):
         b = self.ball
-        sub = dt / SUBSTEPS
+        b.glue_cd = max(0.0, b.glue_cd - dt)
+        steps = max(SUBSTEPS_MIN, min(SUBSTEPS, 1 + int(b.speed * dt / SUBSTEP_PX)))   # bola devagar = menos contas
+        sub = dt / steps
         held = any(self.ctrl)
         fcx = FIELD_X + FIELD_W / 2
-        for _ in range(SUBSTEPS):
+        x0, y0 = b.x, b.y
+        for _ in range(steps):
             for r in self.rods:
                 r.update(sub)
             if held:                                  # bola dominada: fica presa no pé do boneco
                 b.x, b.y = self.held_pos()
                 b.vx = b.vy = 0.0
+                continue
+            if b.glue is not None and self._glue_step(sub):
+                grod = b.glue["rod"]
+                px, py = b.x, b.y
+                for r in self.rods:                   # um adversário encostou na bola grudada: rouba
+                    if r is not grod and abs(b.x - r.x) < 60 and r.collide(b):
+                        b.unglue(b.vx, b.vy)
+                        self.sfx("touch")
+                        break
+                if b.glue is not None:
+                    self.collide_walls()
+                    if abs(b.x - px) > 0.5 or abs(b.y - py) > 0.5:      # parede empurrou: solta
+                        b.unglue(b.vx, b.vy)
                 continue
             if FIELD_X <= b.x <= FIELD_X + FIELD_W:   # campo curvado: puxa a bola para o centro
                 b.vx -= CURVE_KX * (b.x - fcx) * sub
@@ -430,6 +476,8 @@ class Match:
                     elif h == 1 and self._touch_cd <= 0:
                         self.sfx("touch")
                         self._touch_cd = 0.06
+                    if b.glue is not None:            # acabou de grudar: não testa as outras hastes
+                        break
             imp = self.collide_walls()
             if imp > 140 and self._wall_cd <= 0:
                 self.sfx("wall")
@@ -442,19 +490,36 @@ class Match:
                     self.on_goal(0)
                     allow_goal = False
         if held:
+            b.idle = 0.0
             return
-        f = math.exp(-BALL_FRICTION * dt)
-        b.vx *= f
-        b.vy *= f
-        sp = b.speed
-        if sp > BALL_MAX:
-            b.vx, b.vy = b.vx / sp * BALL_MAX, b.vy / sp * BALL_MAX
-        if self.phase == "play":                  # anti-travamento
-            b.stuck = b.stuck + dt if sp < 25 else 0.0
-            if b.stuck > 1.2:
-                ang = math.atan2(CY - b.y, FIELD_X + FIELD_W / 2 - b.x) + random.uniform(-0.6, 0.6)
-                b.vx, b.vy = math.cos(ang) * 300, math.sin(ang) * 300
-                b.stuck = 0.0
+        if b.glue is None:
+            f = math.exp(-BALL_FRICTION * dt)
+            b.vx *= f
+            b.vy *= f
+            sp = b.speed
+            if sp > BALL_MAX:
+                b.vx, b.vy = b.vx / sp * BALL_MAX, b.vy / sp * BALL_MAX
+        if self.phase == "play":                  # bola parada por 5 s: ela se mexe sozinha
+            moved = math.hypot(b.x - x0, b.y - y0) / dt if dt > 0 else 0.0
+            b.idle = b.idle + dt if moved < IDLE_SPEED else 0.0
+            if b.idle >= IDLE_NUDGE_TIME:
+                self.nudge_ball()
+        else:
+            b.idle = 0.0
+
+    def nudge_ball(self):
+        """Empurrãozinho numa bola que ficou parada tempo demais."""
+        b = self.ball
+        b.idle = 0.0
+        b.glue = None
+        b.glue_cd = 0.8
+        cx = FIELD_X + FIELD_W / 2
+        if math.hypot(cx - b.x, CY - b.y) > 70:
+            ang = math.atan2(CY - b.y, cx - b.x) + random.uniform(-0.6, 0.6)
+        else:
+            ang = random.uniform(0, 2 * math.pi)
+        b.vx, b.vy = math.cos(ang) * IDLE_NUDGE_SPEED, math.sin(ang) * IDLE_NUDGE_SPEED
+        self.sfx("touch")
 
     def update(self, dt, keys):
         self._touch_cd = max(0.0, self._touch_cd - dt)
@@ -530,59 +595,51 @@ class Match:
         for px in (FIELD_X, FIELD_X + FIELD_W):
             for py in (gy1, gy1 + GOAL_H):
                 pygame.draw.circle(s, WHITE, (px, py), 6)
+        for r in self.rods:                      # hastes e pinos: fixos, já ficam desenhados na mesa
+            pygame.draw.line(s, (90, 94, 104), (r.x, FIELD_Y - 18), (r.x, FIELD_Y + FIELD_H + 18), 8)
+            pygame.draw.line(s, STEEL, (r.x, FIELD_Y - 18), (r.x, FIELD_Y + FIELD_H + 18), 5)
+            ky = FIELD_Y + FIELD_H + 12 if r.team == 0 else FIELD_Y - 12
+            pygame.draw.circle(s, TEAM_COLORS[r.team], (int(r.x), ky), 9)
+            pygame.draw.circle(s, TEAM_DARK[r.team], (int(r.x), ky), 9, 2)
+        try:
+            s = s.convert()                      # mesmo formato da tela = blit rápido
+        except Exception:
+            pass
         return s
 
     def draw_rod_line(self, surf, r):
-        pygame.draw.line(surf, (90, 94, 104), (r.x, FIELD_Y - 18), (r.x, FIELD_Y + FIELD_H + 18), 8)
-        pygame.draw.line(surf, STEEL, (r.x, FIELD_Y - 18), (r.x, FIELD_Y + FIELD_H + 18), 5)
-        ky = FIELD_Y + FIELD_H + 12 if r.team == 0 else FIELD_Y - 12
-        pygame.draw.circle(surf, TEAM_COLORS[r.team], (int(r.x), ky), 9)
-        pygame.draw.circle(surf, TEAM_DARK[r.team], (int(r.x), ky), 9, 2)
+        """A haste em si já está na mesa; aqui só o anel da haste selecionada."""
         if self.seen(r.team) and r is self.selected(r.team):
+            ky = FIELD_Y + FIELD_H + 12 if r.team == 0 else FIELD_Y - 12
             pygame.draw.circle(surf, WHITE, (int(r.x), ky), 13, 3)
-
-    def draw_fig(self, surf, r, fy, col, dx=0, dy=0, with_head=True):
-        """Boneco visto de cima.
-        Parado: cápsula vertical com a cabeça no centro.
-        Chutando: tronco (retângulo) na haste, perna esticada para frente com ponta
-        arredondada e a cabeça atrás do tronco."""
-        d, w, h = r.dir, FIG_W, r.fig_h
-        ext = r.foot * d                       # > 0: pé avançado na direção do ataque
-        cy = int(fy + dy)
-
-        def X(f):                              # X a partir da haste, f > 0 = para frente
-            return r.x + dx + d * f
-
-        if ext <= KICK_POSE_MIN:
-            fx = r.x + r.foot + dx
-            body = pygame.Rect(0, 0, w, h)
-            body.center = (int(fx), cy)
-            pygame.draw.rect(surf, col, body, border_radius=w // 2)
-            head_c = (fx, cy)
-        else:
-            bh, lh = int(h * 0.90), int(h * 0.54)
-            xa, xb = sorted((X(-5.75), X(5.75)))
-            pygame.draw.rect(surf, col, (int(xa), cy - bh // 2, int(xb - xa) + 1, bh))
-            tip = ext + w / 2                  # ponta da perna = borda da área de colisão
-            if tip > 6:
-                bulge = 3.0
-                pts = [(X(5.5), cy - lh / 2)]
-                for k in range(-4, 5):
-                    u = k / 4
-                    pts.append((X(tip - bulge * u * u), cy + u * lh / 2))
-                pts.append((X(5.5), cy + lh / 2))
-                pygame.draw.polygon(surf, col, pts)
-            head_c = (X(-6), cy)
-        if with_head:
-            head = pygame.Rect(0, 0, 15, 14)
-            head.center = (int(head_c[0]), int(head_c[1]))
-            pygame.draw.ellipse(surf, HEAD_COLOR, head)
 
     @staticmethod
     def _rect(cx, cy, w, h):
         rc = pygame.Rect(0, 0, max(1, int(round(w))), max(1, int(round(h))))
         rc.center = (int(round(cx)), int(round(cy)))
         return rc
+
+    def _capsule(self, team, w, h):
+        """Boneco parado (sombra + corpo + cabeça) desenhado uma vez e guardado."""
+        key = (team, w, h)
+        spr = self._sprites.get(key)
+        if spr is None:
+            col, dark = TEAM_COLORS[team], TEAM_DARK[team]
+            spr = pygame.Surface((w + 6, h + 6), pygame.SRCALPHA)
+            body = pygame.Rect(2, 2, w, h)
+            rad = int(w // 2)
+            pygame.draw.rect(spr, SHADOW, body.move(3, 4), border_radius=rad)
+            pygame.draw.rect(spr, col, body, border_radius=rad)
+            pygame.draw.rect(spr, dark, body, 2, border_radius=rad)
+            head = self._rect(body.centerx, body.centery, 15, 14)
+            pygame.draw.ellipse(spr, HEAD, head)
+            pygame.draw.ellipse(spr, HEAD_DARK, head, 2)
+            try:
+                spr = spr.convert_alpha()
+            except Exception:
+                pass
+            self._sprites[key] = spr
+        return spr
 
     def draw_figures(self, surf, r):
         """Parado: cápsula com a cabeça no centro.  Chutando: formato em T (ombros + pé)."""
@@ -593,11 +650,8 @@ class Match:
             if len(parts) == 1:
                 cx, cy, w, h = parts[0]
                 body = self._rect(cx, cy, w, h)
-                rad = int(w // 2)
-                pygame.draw.rect(surf, SHADOW, body.move(3, 4), border_radius=rad)
-                pygame.draw.rect(surf, col, body, border_radius=rad)
-                pygame.draw.rect(surf, dark, body, 2, border_radius=rad)
-                head_c = (cx, cy)
+                surf.blit(self._capsule(r.team, body.w, body.h), (body.x - 2, body.y - 2))
+                continue
             else:
                 (scx, scy, sw, sh), (fcx, fcy, fw, fh) = parts
                 sb, fb = self._rect(scx, scy, sw, sh), self._rect(fcx, fcy, fw, fh)
@@ -620,9 +674,20 @@ class Match:
     def draw_ball(self, surf):
         b = self.ball
         x, y = int(b.x), int(b.y)
-        pygame.draw.circle(surf, SHADOW, (x + 3, y + 4), b.r)
-        pygame.draw.circle(surf, WHITE, (x, y), b.r)
-        pygame.draw.circle(surf, (30, 30, 30), (x, y), b.r, 2)
+        spr = self._sprites.get("ball")
+        if spr is None:
+            R = b.r
+            spr = pygame.Surface((2 * R + 6, 2 * R + 6), pygame.SRCALPHA)
+            c = (R + 1, R + 1)
+            pygame.draw.circle(spr, SHADOW, (c[0] + 3, c[1] + 4), R)
+            pygame.draw.circle(spr, WHITE, c, R)
+            pygame.draw.circle(spr, (30, 30, 30), c, R, 2)
+            try:
+                spr = spr.convert_alpha()
+            except Exception:
+                pass
+            self._sprites["ball"] = spr
+        surf.blit(spr, (x - b.r - 1, y - b.r - 1))
         ang = (b.x + b.y) / 6.0
         pygame.draw.circle(surf, (40, 40, 40), (int(x + math.cos(ang) * 5), int(y + math.sin(ang) * 5)), 3)
 
@@ -701,21 +766,35 @@ class Match:
             lvl = level_from_charge(value)
             draw_text(surf, LEVEL_NAMES[lvl], 24, LEVEL_COLORS[lvl], (rect.right, rect.y - 16), "midright")
 
+    def _hud_top(self):
+        """Faixa de cima do placar: só é redesenhada quando placar/rodadas mudam."""
+        key = (self.names, self.mode, self.ai_level, tuple(self.round_wins), self.round_no, self.tiebreak,
+               self.rounds_total, tuple(self.scores), self.points_to_win)
+        if key != self._hud_key:
+            s = pygame.Surface((WIDTH, 90))
+            pygame.draw.rect(s, (14, 18, 26), (0, 0, WIDTH, 86))
+            pygame.draw.line(s, (60, 70, 90), (0, 86), (WIDTH, 86), 2)
+            draw_text(s, self.names[0].upper(), 34, TEAM_COLORS[0], (30, 26), "midleft")
+            name1 = self.names[1].upper()
+            if self.mode == "ia":
+                name1 += " - " + AI_LEVELS[self.ai_level]["name"].upper()
+            draw_text(s, name1, 34, TEAM_COLORS[1], (WIDTH - 30, 26), "midright")
+            draw_text(s, f"Rodadas ganhas: {self.round_wins[0]}", 24, LIGHT, (30, 60), "midleft")
+            draw_text(s, f"Rodadas ganhas: {self.round_wins[1]}", 24, LIGHT, (WIDTH - 30, 60), "midright")
+            label = "DESEMPATE" if self.tiebreak else f"RODADA {self.round_no} DE {self.rounds_total}"
+            draw_text(s, label, 24, YELLOW, (WIDTH // 2, 14))
+            draw_text(s, f"{self.scores[0]}  x  {self.scores[1]}", 64, WHITE, (WIDTH // 2, 48))
+            draw_text(s, f"Primeiro a {self.points_to_win} pontos vence a rodada", 20, GRAY,
+                      (WIDTH // 2, 77), shadow=False)
+            try:
+                s = s.convert()
+            except Exception:
+                pass
+            self._hud_key, self._hud_surf = key, s
+        return self._hud_surf
+
     def draw_hud(self, surf):
-        pygame.draw.rect(surf, (14, 18, 26), (0, 0, WIDTH, 86))
-        pygame.draw.line(surf, (60, 70, 90), (0, 86), (WIDTH, 86), 2)
-        draw_text(surf, self.names[0].upper(), 34, TEAM_COLORS[0], (30, 26), "midleft")
-        name1 = self.names[1].upper()
-        if self.mode == "ia":
-            name1 += " - " + AI_LEVELS[self.ai_level]["name"].upper()
-        draw_text(surf, name1, 34, TEAM_COLORS[1], (WIDTH - 30, 26), "midright")
-        draw_text(surf, f"Rodadas ganhas: {self.round_wins[0]}", 24, LIGHT, (30, 60), "midleft")
-        draw_text(surf, f"Rodadas ganhas: {self.round_wins[1]}", 24, LIGHT, (WIDTH - 30, 60), "midright")
-        label = "DESEMPATE" if self.tiebreak else f"RODADA {self.round_no} DE {self.rounds_total}"
-        draw_text(surf, label, 24, YELLOW, (WIDTH // 2, 14))
-        draw_text(surf, f"{self.scores[0]}  x  {self.scores[1]}", 64, WHITE, (WIDTH // 2, 48))
-        draw_text(surf, f"Primeiro a {self.points_to_win} pontos vence a rodada", 20, GRAY,
-                  (WIDTH // 2, 77), shadow=False)
+        surf.blit(self._hud_top(), (0, 0))
         # barras de força
         for t, x in ((0, 60), (1, 540)):
             rect = pygame.Rect(x, 636, 400, 24)
@@ -748,9 +827,10 @@ class Match:
             draw_text(surf, "GOOOL!", 150, TEAM_COLORS[self.last_scorer], (cx, cy - 20))
             draw_text(surf, f"Gol de {self.names[self.last_scorer]}", 40, WHITE, (cx, cy + 80))
         elif self.phase == "round_end":
-            ov = pygame.Surface((WIDTH, 170), pygame.SRCALPHA)
-            ov.fill((0, 0, 0, 180))
-            surf.blit(ov, (0, cy - 85))
+            if self._round_ov is None:
+                self._round_ov = pygame.Surface((WIDTH, 170), pygame.SRCALPHA)
+                self._round_ov.fill((0, 0, 0, 180))
+            surf.blit(self._round_ov, (0, cy - 85))
             w = self.round_winner
             draw_text(surf, f"{self.names[w]} venceu a rodada {self.round_no}!", 56, TEAM_COLORS[w], (cx, cy - 25))
             draw_text(surf, f"Rodadas: {self.round_wins[0]} x {self.round_wins[1]}", 38, WHITE, (cx, cy + 35))

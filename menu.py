@@ -9,8 +9,8 @@ DIFF_COLORS = ((90, 220, 120), (255, 214, 64), (255, 90, 90))
 
 ALLOWED_CHARS = "0123456789.:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-"
 
-ROW_TOP = 192        # y da primeira linha
-ROW_STEP = 82        # distância entre linhas
+ROW_TOP = 214        # y da primeira linha (logo da imagem ocupa o topo)
+ROW_STEP = 72        # distância entre linhas
 
 
 class Menu:
@@ -20,11 +20,25 @@ class Menu:
         self.addr = ""
         self.allowed = [0, 2, 3] if MOBILE else [0, 1, 2, 3]     # no celular não há Player vs Player local
         self.focus = 0
+        self.bg = self._load_bg()
+        self.pad_color = (12, 45, 81)                 # cor das laterais (celular) combinando com a imagem
+        self._panel_cache = {}
         self.labels = {"mode": "MODO DE JOGO",
                        "diff": "DIFICULDADE DA IA",
                        "addr": "CÓDIGO DA SALA (ou ip:porta)",
                        "rounds": "QUANTIDADE DE RODADAS (1 a 10)",
                        "points": "PONTOS MÁXIMOS POR RODADA (2 a 5)"}
+
+    @staticmethod
+    def _load_bg():
+        try:
+            img = pygame.image.load(resource_path("assets/menu_bg.png"))
+            try:
+                return img.convert()
+            except Exception:
+                return img
+        except Exception:
+            return None                                # sem a imagem: fundo liso, o jogo funciona igual
 
     # ---------------------------------------------------------------- layout
     @property
@@ -40,21 +54,32 @@ class Menu:
     def start_label(self):
         return ("INICIAR JOGO", "INICIAR JOGO", "CRIAR SALA", "ENTRAR NA SALA")[self.mode]
 
+    @property
+    def note(self):
+        """Aviso curto sobre o modo online (aparece abaixo do botão)."""
+        if self.mode == 2:
+            return ("Você recebe um CÓDIGO para passar ao amigo (qualquer internet)" if RELAY_SERVER
+                    else "Servidor online não configurado: só mesma rede Wi-Fi / VPN")
+        if self.mode == 3:
+            return "Digite o código que o amigo passou"
+        return ""
+
     def layout(self):
         rows = self.rows
         sel = []
         for i in range(len(rows)):
             y = ROW_TOP + ROW_STEP * i
             if rows[i] == "addr":          # caixa de texto + botão COLAR
-                sel.append((pygame.Rect(0, 0, 0, 0), pygame.Rect(280, y + 28, 320, 44),
-                            pygame.Rect(610, y + 28, 110, 44)))
+                sel.append((pygame.Rect(0, 0, 0, 0), pygame.Rect(280, y + 26, 320, 42),
+                            pygame.Rect(610, y + 26, 110, 42)))
                 continue
-            sel.append((pygame.Rect(280, y + 28, 50, 44),
-                        pygame.Rect(340, y + 28, 320, 44),
-                        pygame.Rect(670, y + 28, 50, 44)))
-        start_y = ROW_TOP + ROW_STEP * len(rows) + 8
-        start = pygame.Rect(350, start_y, 300, 62)
-        panel = pygame.Rect(250, 170, 500, start.bottom + 24 - 170)
+            sel.append((pygame.Rect(280, y + 26, 48, 42),
+                        pygame.Rect(336, y + 26, 328, 42),
+                        pygame.Rect(672, y + 26, 48, 42)))
+        start_y = ROW_TOP + ROW_STEP * len(rows) + 4
+        start = pygame.Rect(350, start_y, 300, 56)
+        bottom = start.bottom + (46 if self.note else 20)
+        panel = pygame.Rect(240, ROW_TOP - 12, 520, bottom - (ROW_TOP - 12))
         return sel, start, panel
 
     # ---------------------------------------------------------------- lógica
@@ -162,25 +187,37 @@ class Menu:
         pygame.draw.rect(surf, col, rect, border_radius=10)
         draw_text(surf, text, size, WHITE if enabled else GRAY, rect.center, shadow=enabled)
 
+    def _panel_surf(self, size):
+        """Painel translúcido (criado uma vez por tamanho)."""
+        p = self._panel_cache.get(size)
+        if p is None:
+            p = pygame.Surface(size, pygame.SRCALPHA)
+            pygame.draw.rect(p, (10, 20, 38, 205), p.get_rect(), border_radius=22)
+            pygame.draw.rect(p, (110, 140, 200, 230), p.get_rect(), 3, border_radius=22)
+            try:
+                p = p.convert_alpha()
+            except Exception:
+                pass
+            self._panel_cache[size] = p
+        return p
+
     def draw(self, surf):
-        surf.fill(BG)
-        for r, a in ((330, 14), (230, 18), (130, 22)):
-            pygame.draw.circle(surf, (28 + a, 40 + a, 56 + a), (WIDTH // 2, 340), r, 3)
-        draw_text(surf, "PEBOLIM ARCADE", 104, YELLOW, (WIDTH // 2, 72))
-        draw_text(surf, "Configuração da Sala", 36, LIGHT, (WIDTH // 2, 142))
+        if self.bg is not None:
+            surf.blit(self.bg, (0, 0))
+        else:
+            surf.fill(BG)
+            draw_text(surf, "PEBOLIM ARCADE", 104, YELLOW, (WIDTH // 2, 100))
         sel, start, panel = self.layout()
-        pygame.draw.rect(surf, (0, 0, 0), panel.move(0, 6), border_radius=22)
-        pygame.draw.rect(surf, (30, 40, 58), panel, border_radius=22)
-        pygame.draw.rect(surf, (80, 100, 140), panel, 3, border_radius=22)
+        surf.blit(self._panel_surf((panel.w, panel.h)), panel.topleft)
         for i, kind in enumerate(self.rows):
             l, box, r = sel[i]
-            draw_text(surf, self.labels[kind], 26, LIGHT, (box.centerx, l.y - 12))
+            draw_text(surf, self.labels[kind], 22, LIGHT, (box.centerx, box.y - 13))
             pygame.draw.rect(surf, (18, 24, 36), box, border_radius=10)
             pygame.draw.rect(surf, YELLOW if self.focus == i else (80, 100, 140), box, 3, border_radius=10)
             color = DIFF_COLORS[self.diff] if kind == "diff" else WHITE
             if kind == "addr" and not self.addr and not self.editing_text:
                 color = GRAY
-            draw_text(surf, self.value_text(kind), 30 if kind == "addr" else 36, color, box.center)
+            draw_text(surf, self.value_text(kind), 28 if kind == "addr" else 32, color, box.center)
             if kind == "addr":
                 self._arrow(surf, r, "COLAR", True, 22)
                 continue
@@ -188,8 +225,10 @@ class Menu:
             self._arrow(surf, l, "<", can_l)
             self._arrow(surf, r, ">", can_r)
         Button(start, self.start_label, (40, 160, 80)).draw(surf, focused=(self.focus == len(self.rows)))
-        if self.mode >= 2:
-            draw_text(surf, "Online: só funciona com os dois na MESMA rede Wi-Fi", 24, YELLOW, (WIDTH // 2, 602))
+        if self.note:
+            draw_text(surf, self.note, 20, YELLOW, (WIDTH // 2, start.bottom + 24))
         hint = ("Toque nas setas para ajustar" if MOBILE else
-                "Mouse ou setas para ajustar  |  ENTER inicia  |  Máx. 1 giro por chute (sem roletão)")
-        draw_text(surf, hint, 22, GRAY, (WIDTH // 2, 668))
+                "Mouse ou setas para ajustar  |  ENTER inicia")
+        draw_text(surf, hint, 20, LIGHT, (16, HEIGHT - 14), "midleft")
+        draw_text(surf, CREDIT, 20, WHITE, (WIDTH - 14, HEIGHT - 28), "midright")
+        draw_text(surf, "v" + VERSION, 18, LIGHT, (WIDTH - 14, HEIGHT - 10), "midright")

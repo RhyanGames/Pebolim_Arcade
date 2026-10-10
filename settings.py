@@ -12,6 +12,15 @@ PAD = 200 if MOBILE else 0                 # painéis de controle dos lados do c
 LW, LH = WIDTH + 2 * PAD, HEIGHT           # tamanho total da tela lógica
 FPS = 60
 TITLE = "Pebolim Arcade"
+VERSION = "0.1.1"
+CREDIT = "By Rhyan (EsnorQGames)"
+
+
+def resource_path(rel):
+    """Caminho de um arquivo do jogo (funciona no .exe do PyInstaller, no APK e rodando o .py)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
 
 # ---- Campo (visão de cima; gols nas laterais esquerda e direita) ----
 FIELD_X, FIELD_Y, FIELD_W, FIELD_H = 60, 110, 880, 470
@@ -60,7 +69,20 @@ KICK_COOLDOWN = 0.10  # espera antes de poder carregar outro chute
 BALL_FRICTION = 0.45
 BALL_MAX = 1150.0
 WALL_BOUNCE = 0.80
-SUBSTEPS = 4
+SUBSTEPS = 4              # máximo de passos de física por quadro
+SUBSTEP_PX = 6.0          # passos adaptativos: ~1 passo a cada 6 px que a bola anda
+SUBSTEPS_MIN = 2
+BALL_RESTITUTION = 0.15   # quique da bola nos bonecos (baixo: a bola "morre" no boneco)
+IDLE_NUDGE_TIME = 5.0     # bola parada por tanto tempo (s) = ela se mexe sozinha
+IDLE_NUDGE_SPEED = 280.0  # velocidade do empurrãozinho
+IDLE_SPEED = 25.0         # abaixo disso (px/s) a bola é considerada parada
+
+# ---- "Cola": a bola gruda no boneco quando encosta devagar e vai junto com a haste ----
+GLUE_MAX_REL = 430.0      # só gruda se bater no boneco com velocidade até essa (px/s)
+GLUE_FREE_SPEED = 170.0   # mexer a haste mais devagar que isso nunca solta a bola
+GLUE_SLIP_TIME = 0.15     # mexendo a haste na velocidade máxima, a bola escapa em ~0,25 s (mexer devagar = ela acompanha)
+GLUE_MAX_TIME = 6.0       # no máximo tanto tempo grudada (depois é empurrada para frente)
+GLUE_COOLDOWN = 0.45      # depois de soltar, não gruda de novo por esse tempo (s)
 
 # ---- Regras ----
 EARLY_CLINCH = True   # encerra a partida se um jogador já garantiu a maioria das rodadas

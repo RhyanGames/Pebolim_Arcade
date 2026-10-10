@@ -28,19 +28,50 @@ def font(size):
     return f
 
 
+_text_cache = {}
+_dim_cache = {}
+
+
 def draw_text(surf, text, size, color, pos, anchor="center", shadow=True):
-    f = font(size)
-    img = f.render(text, True, color)
-    rect = img.get_rect(**{anchor: pos})
+    """Texto com cache: cada (texto, tamanho, cor) é renderizado uma vez só (render de fonte é caro no celular)."""
+    key = (text, size, color, shadow)
+    spr = _text_cache.get(key)
+    if spr is None:
+        f = font(size)
+        img = f.render(text, True, color)
+        if shadow:
+            w, h = img.get_size()
+            spr = pygame.Surface((w + 2, h + 2), pygame.SRCALPHA)
+            spr.blit(f.render(text, True, (0, 0, 0)), (2, 2))
+            spr.blit(img, (0, 0))
+        else:
+            spr = img
+        try:
+            spr = spr.convert_alpha()
+        except Exception:
+            pass
+        if len(_text_cache) > 400:          # textos que mudam sempre (ex.: digitando) não enchem a memória
+            _text_cache.clear()
+        _text_cache[key] = spr
+    w, h = spr.get_size()
     if shadow:
-        surf.blit(f.render(text, True, (0, 0, 0)), rect.move(2, 2))
-    surf.blit(img, rect)
+        w, h = w - 2, h - 2
+    rect = pygame.Rect(0, 0, w, h)
+    setattr(rect, anchor, pos)
+    surf.blit(spr, rect.topleft)
     return rect
 
 
 def dim(surf, alpha=170):
-    ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    ov.fill((0, 0, 0, alpha))
+    ov = _dim_cache.get(alpha)
+    if ov is None:
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, alpha))
+        try:
+            ov = ov.convert_alpha()
+        except Exception:
+            pass
+        _dim_cache[alpha] = ov
     surf.blit(ov, (0, 0))
 
 
