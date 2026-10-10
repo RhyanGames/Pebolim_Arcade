@@ -69,7 +69,8 @@ Para jogar entre internets diferentes (ex.: você no Wi-Fi de casa, o amigo no 4
 usa um **servidor relay** pequeno (`relay_server.py`). Ele só liga os dois jogadores pelo código da sala.
 O relay precisa ficar **ligado numa máquina com endereço público** (você hospeda uma vez; todos usam).
 
-1. Hospede o `relay_server.py` (porta TCP 5555, ou a variável `PORT`). Precisa aceitar **TCP puro**.
+1. Hospede o `relay_server.py` (ele aceita **WebSocket** e **TCP puro** na mesma porta; usa a variável `PORT` se existir).
+   - **Render (grátis)**: Web Service, Language *Docker*, plano **Free**; use `RELAY_SERVER = "wss://SEU-APP.onrender.com"`.
    - Teste rápido no seu PC: `python relay_server.py` + um túnel TCP (ex.: playit.gg) que dê um endereço público.
    - Fixo: uma VPS/VM pequena (qualquer nuvem) ou um serviço que aceite TCP e rode o `Dockerfile` desta pasta.
 2. Abra `settings.py` e preencha uma linha:  `RELAY_SERVER = "seu-servidor.exemplo.com:5555"`

@@ -4,10 +4,13 @@ Dois jeitos de jogar:
   * Sala por CÓDIGO (qualquer internet): os dois jogadores conectam no servidor relay (relay_server.py).
   * Endereço direto ip:porta (mesma rede / VPN): Listener (host) + Connector (cliente).
 """
+import base64
 import json
+import os
 import queue
 import re
 import socket
+import struct
 import threading
 import time
 
@@ -161,14 +164,6 @@ def is_room_code(text):
     return re.fullmatch(r"[A-Za-z0-9]{4,8}", text.strip()) is not None
 
 
-def parse_server(addr, default_port=5555):
-    host, port = addr.strip(), default_port
-    if ":" in host:
-        host, p = host.rsplit(":", 1)
-        port = int(p)
-    return host, port
-
-
 class LineReader:
     """Lê uma linha por vez SEM ler nada além dela (o resto do fluxo é do jogo)."""
 
@@ -188,17 +183,200 @@ class LineReader:
                 raise ConnectionError("resposta inválida")
 
 
-def _relay_connect(server):
+def parse_relay(server):
+    """'wss://x.onrender.com' -> WebSocket seguro | 'x.com:5555' -> TCP puro. Retorna (host, porta, ws, tls)."""
+    s = server.strip()
+    ws = tls = False
+    port = 5555
+    for prefix, is_tls, p in (("wss://", True, 443), ("https://", True, 443), ("ws://", False, 80), ("http://", False, 80)):
+        if s.lower().startswith(prefix):
+            s, ws, tls, port = s[len(prefix):], True, is_tls, p
+            break
+    s = s.split("/")[0]
+    host = s
+    if ":" in s:
+        host, p = s.rsplit(":", 1)
+        port = int(p)
+    if not host:
+        raise ValueError("vazio")
+    return host, port, ws, tls
+
+
+class WSSock:
+    """Um WebSocket (cliente) com cara de socket: sendall/recv/settimeout/shutdown/close.
+    Cada sendall vira uma mensagem; recv devolve os bytes das mensagens como um fluxo contínuo."""
+
+    def __init__(self, raw, leftover=b""):
+        self.raw = raw
+        self.rawbuf = bytearray(leftover)
+        self.buf = bytearray()
+        self.closed = False
+        self.wlock = threading.Lock()
+
+    def settimeout(self, t):
+        self.raw.settimeout(t)
+
+    def setsockopt(self, *a):
+        try:
+            self.raw.setsockopt(*a)
+        except OSError:
+            pass
+
+    def _send_frame(self, op, data):
+        n = len(data)
+        mask = os.urandom(4)
+        if n < 126:
+            hdr = bytes([0x80 | op, 0x80 | n])
+        elif n < 65536:
+            hdr = bytes([0x80 | op, 0x80 | 126]) + struct.pack(">H", n)
+        else:
+            hdr = bytes([0x80 | op, 0x80 | 127]) + struct.pack(">Q", n)
+        body = b""
+        if n:
+            key = (mask * (n // 4 + 1))[:n]
+            body = (int.from_bytes(data, "big") ^ int.from_bytes(key, "big")).to_bytes(n, "big")
+        with self.wlock:
+            self.raw.sendall(hdr + mask + body)
+
+    def sendall(self, data):
+        self._send_frame(2, bytes(data))
+
+    def _need(self, n):
+        while len(self.rawbuf) < n:                 # um timeout aqui não perde nada: o buffer é mantido
+            chunk = self.raw.recv(65536)
+            if not chunk:
+                raise ConnectionError("conexão fechada")
+            self.rawbuf += chunk
+
+    def _next_frame(self):
+        self._need(2)
+        op, ln = self.rawbuf[0] & 0x0F, self.rawbuf[1] & 0x7F
+        masked, off = self.rawbuf[1] & 0x80, 2
+        if ln == 126:
+            self._need(4)
+            ln, off = struct.unpack(">H", bytes(self.rawbuf[2:4]))[0], 4
+        elif ln == 127:
+            self._need(10)
+            ln, off = struct.unpack(">Q", bytes(self.rawbuf[2:10]))[0], 10
+        mk = 4 if masked else 0
+        self._need(off + mk + ln)
+        data = bytes(self.rawbuf[off + mk:off + mk + ln])
+        if masked and ln:
+            key = (bytes(self.rawbuf[off:off + 4]) * (ln // 4 + 1))[:ln]
+            data = (int.from_bytes(data, "big") ^ int.from_bytes(key, "big")).to_bytes(ln, "big")
+        del self.rawbuf[:off + mk + ln]
+        return op, data
+
+    def recv(self, n):
+        while not self.buf:
+            if self.closed:
+                return b""
+            try:
+                op, data = self._next_frame()
+            except ConnectionError:
+                self.closed = True
+                return b""
+            if op in (0, 1, 2):
+                self.buf += data
+            elif op == 8:
+                self.closed = True
+                return b""
+            elif op == 9:
+                self._send_frame(10, data)
+        out = bytes(self.buf[:n])
+        del self.buf[:n]
+        return out
+
+    def shutdown(self, how):
+        self.raw.shutdown(how)
+
+    def close(self):
+        try:
+            self._send_frame(8, b"")
+        except OSError:
+            pass
+        try:
+            self.raw.close()
+        except OSError:
+            pass
+
+
+def _tcp_or_tls(host, port, tls):
+    if not tls:
+        return socket.create_connection((host, port), timeout=15)
     try:
-        host, port = parse_server(server)
+        import ssl
+    except ImportError:
+        raise ConnectionError("Este aparelho não tem suporte a conexão segura (ssl).")
+    for verify in (True, False):                    # Android pode não ter os certificados: tenta sem verificar
+        sock = socket.create_connection((host, port), timeout=15)
+        try:
+            ctx = ssl.create_default_context() if verify else ssl._create_unverified_context()
+            return ctx.wrap_socket(sock, server_hostname=host)
+        except ssl.SSLError:
+            sock.close()
+            if not verify:
+                raise
+        except OSError:
+            sock.close()
+            raise
+
+
+def ws_open(host, port, tls):
+    """Conecta e faz o handshake WebSocket. Levanta OSError se o servidor ainda não está pronto."""
+    sock = _tcp_or_tls(host, port, tls)
+    try:
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET / HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk or len(data) > 8192:
+                raise OSError("handshake falhou")
+            data += chunk
+        head, _, rest = data.partition(b"\r\n\r\n")
+        if b" 101 " not in head.split(b"\r\n")[0] + b" ":
+            raise OSError("servidor ainda não está pronto")
+        return WSSock(sock, rest)
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
+        raise
+
+
+def _relay_connect(server, status=None, stop=None):
+    """Conecta no relay (WebSocket ou TCP). Servidores grátis 'dormem': tenta de novo por até ~80 s."""
+    try:
+        host, port, ws, tls = parse_relay(server)
     except ValueError:
         raise ConnectionError("Endereço do servidor online inválido.")
-    try:
-        return socket.create_connection((host, port), timeout=WAKE_TIMEOUT)
-    except socket.gaierror:
-        raise ConnectionError("Não achei o servidor online. Confira a internet.")
-    except OSError:
-        raise ConnectionError("Não consegui conectar ao servidor online.")
+    if not ws:
+        try:
+            return socket.create_connection((host, port), timeout=WAKE_TIMEOUT)
+        except socket.gaierror:
+            raise ConnectionError("Não achei o servidor online. Confira a internet.")
+        except OSError:
+            raise ConnectionError("Não consegui conectar ao servidor online.")
+    deadline = time.time() + WAKE_TIMEOUT
+    while True:
+        try:
+            return ws_open(host, port, tls)
+        except socket.gaierror:
+            raise ConnectionError("Não achei o servidor online. Confira a internet.")
+        except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError):
+            pass                                    # servidor ainda acordando: tenta de novo
+        except ConnectionError:
+            raise                                   # erro definitivo (ex.: sem suporte a ssl)
+        except OSError:
+            pass                                    # handshake ainda não pronto / timeout: tenta de novo
+        if (stop and stop()) or time.time() > deadline:
+            raise ConnectionError("O servidor online não respondeu.")
+        if status:
+            status("Acordando o servidor... (pode levar até 1 min)")
+        time.sleep(3)
 
 
 class RelayHost:
@@ -213,9 +391,13 @@ class RelayHost:
         self._sock = None
         threading.Thread(target=self._run, args=(server,), daemon=True).start()
 
+    def _set_status(self, text):
+        if not self.code:
+            self.status = text
+
     def _run(self, server):
         try:
-            sock = self._sock = _relay_connect(server)
+            sock = self._sock = _relay_connect(server, self._set_status, lambda: self._stop)
             if self._stop:
                 sock.close()
                 return
@@ -271,9 +453,12 @@ class RelayJoin:
         self.status = "Conectando ao servidor... (na 1ª vez pode demorar até 1 min)"
         threading.Thread(target=self._run, args=(server, code.strip().upper()), daemon=True).start()
 
+    def _set_status(self, text):
+        self.status = text
+
     def _run(self, server, code):
         try:
-            sock = _relay_connect(server)
+            sock = _relay_connect(server, self._set_status)
             sock.settimeout(WAKE_TIMEOUT)
             sock.sendall((json.dumps({"op": "join", "code": code}) + "\n").encode())
             msg = json.loads(LineReader(sock).readline())

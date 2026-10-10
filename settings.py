@@ -141,7 +141,9 @@ KICK_POSE_MIN = 6.0                  # a partir de quantos px o pé avançado tr
 # ---- Online ----
 NET_PORT = 5555
 # Servidor relay para jogar online entre internets diferentes (veja relay_server.py e o README).
-# Coloque aqui o endereço onde você hospedou o relay, ex.:  "meu-relay.exemplo.com:5555"
+# Coloque aqui o endereço onde você hospedou o relay:
+#   Render/web:   "wss://meu-relay.onrender.com"
+#   TCP puro:     "meu-servidor.exemplo.com:5555"
 # Vazio = o jogo usa só o modo direto (IP:porta, mesma rede ou VPN).
 RELAY_SERVER = os.environ.get("PEBOLIM_RELAY", "")
 NET_TIMEOUT = 5.0     # segundos sem receber nada = desconectado
