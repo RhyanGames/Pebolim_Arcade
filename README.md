@@ -60,3 +60,21 @@ iPhone: não é possível sem um Mac e conta de desenvolvedor da Apple.
 3. Aba "Actions" > "Gerar APK" > "Run workflow". Espera uns 20 a 40 minutos.
 4. Quando terminar, abra a execução e baixe o "pebolim-apk" na seção Artifacts.
 Se falhar, o log completo fica na própria página; mande as últimas linhas do passo "Compilar o APK".
+
+---
+
+## Online com código de sala (qualquer internet)
+
+Para jogar entre internets diferentes (ex.: você no Wi-Fi de casa, o amigo no 4G em outra cidade) o jogo
+usa um **servidor relay** pequeno (`relay_server.py`). Ele só liga os dois jogadores pelo código da sala.
+O relay precisa ficar **ligado numa máquina com endereço público** (você hospeda uma vez; todos usam).
+
+1. Hospede o `relay_server.py` (porta TCP 5555, ou a variável `PORT`). Precisa aceitar **TCP puro**.
+   - Teste rápido no seu PC: `python relay_server.py` + um túnel TCP (ex.: playit.gg) que dê um endereço público.
+   - Fixo: uma VPS/VM pequena (qualquer nuvem) ou um serviço que aceite TCP e rode o `Dockerfile` desta pasta.
+2. Abra `settings.py` e preencha uma linha:  `RELAY_SERVER = "seu-servidor.exemplo.com:5555"`
+   (ou defina a variável de ambiente `PEBOLIM_RELAY`). Gere de novo o .exe / APK.
+3. No jogo: **Online: criar sala** mostra um código (ex.: `6A991L`) — toque nele para copiar.
+   O amigo escolhe **Online: entrar na sala**, digita (ou toca em **COLAR**) e entra.
+
+Sem `RELAY_SERVER` preenchido, o jogo continua com o modo direto (`ip:porta`, mesma rede / VPN).

@@ -2,6 +2,7 @@
 import pygame
 from settings import *
 from ui import draw_text, Button
+import clip
 
 MODES = ("Player vs IA", "Player vs Player", "Online: criar sala", "Online: entrar na sala")
 DIFF_COLORS = ((90, 220, 120), (255, 214, 64), (255, 90, 90))
@@ -16,12 +17,12 @@ class Menu:
     def __init__(self):
         self.mode, self.rounds, self.points = 0, 3, 3
         self.diff = AI_DEFAULT_LEVEL
-        self.addr = f"127.0.0.1:{NET_PORT}"
+        self.addr = ""
         self.allowed = [0, 2, 3] if MOBILE else [0, 1, 2, 3]     # no celular não há Player vs Player local
         self.focus = 0
         self.labels = {"mode": "MODO DE JOGO",
                        "diff": "DIFICULDADE DA IA",
-                       "addr": "ENDEREÇO DO HOST (ip:porta)",
+                       "addr": "CÓDIGO DA SALA (ou ip:porta)",
                        "rounds": "QUANTIDADE DE RODADAS (1 a 10)",
                        "points": "PONTOS MÁXIMOS POR RODADA (2 a 5)"}
 
@@ -44,6 +45,10 @@ class Menu:
         sel = []
         for i in range(len(rows)):
             y = ROW_TOP + ROW_STEP * i
+            if rows[i] == "addr":          # caixa de texto + botão COLAR
+                sel.append((pygame.Rect(0, 0, 0, 0), pygame.Rect(280, y + 28, 320, 44),
+                            pygame.Rect(610, y + 28, 110, 44)))
+                continue
             sel.append((pygame.Rect(280, y + 28, 50, 44),
                         pygame.Rect(340, y + 28, 320, 44),
                         pygame.Rect(670, y + 28, 50, 44)))
@@ -66,13 +71,19 @@ class Menu:
         elif kind == "points":
             self.points = max(2, min(5, self.points + delta))
 
+    def paste(self):
+        txt = "".join(ch for ch in clip.paste().strip() if ch in ALLOWED_CHARS)
+        if txt:
+            self.addr = txt.upper()[:40]
+
     def value_text(self, kind):
         if kind == "mode":
             return MODES[self.mode]
         if kind == "diff":
             return AI_LEVELS[self.diff]["name"]
         if kind == "addr":
-            return self.addr + ("|" if (pygame.time.get_ticks() // 450) % 2 == 0 else "")
+            cur = "|" if (pygame.time.get_ticks() // 450) % 2 == 0 else ""
+            return (self.addr + cur) if self.addr or self.focus < len(self.rows) and self.rows[self.focus] == "addr" else "digite o código"
         if kind == "rounds":
             return f"{self.rounds} rodada" + ("s" if self.rounds > 1 else "")
         return f"{self.points} pontos"
@@ -98,7 +109,7 @@ class Menu:
             if MOBILE and self.editing_text:
                 for ch in e.text:
                     if ch in ALLOWED_CHARS and len(self.addr) < 40:
-                        self.addr += ch
+                        self.addr += ch.upper()
             return None
         if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
             sel, start, _panel = self.layout()
@@ -110,8 +121,14 @@ class Menu:
                     self.adjust(i, -1)
                     break
                 if self.rows[i] == "addr":
-                    self.focus = i
-                    break
+                    if r.collidepoint(e.pos):
+                        self.focus = i
+                        self.paste()
+                        break
+                    if box.collidepoint(e.pos):
+                        self.focus = i
+                        break
+                    continue
                 if r.collidepoint(e.pos) or (self.rows[i] == "mode" and box.collidepoint(e.pos)):
                     self.focus = i
                     self.adjust(i, +1)
@@ -122,15 +139,9 @@ class Menu:
                 if e.key == pygame.K_BACKSPACE:
                     self.addr = self.addr[:-1]
                 elif e.key == pygame.K_v and (e.mod & pygame.KMOD_CTRL):
-                    try:
-                        pygame.scrap.init()
-                        txt = pygame.scrap.get(pygame.SCRAP_TEXT)
-                        if txt:
-                            self.addr = (self.addr + txt.decode(errors="ignore").strip("\x00 \r\n"))[:40]
-                    except Exception:
-                        pass
+                    self.paste()
                 elif (not MOBILE) and e.unicode and e.unicode in ALLOWED_CHARS and len(self.addr) < 40:
-                    self.addr += e.unicode
+                    self.addr += e.unicode.upper()
                 return None
             if e.key == pygame.K_UP:
                 self.focus = (self.focus - 1) % (n + 1)
@@ -145,11 +156,11 @@ class Menu:
         return None
 
     # ---------------------------------------------------------------- desenho
-    def _arrow(self, surf, rect, text, enabled):
+    def _arrow(self, surf, rect, text, enabled, size=40):
         hover = rect.collidepoint(pygame.mouse.get_pos()) and enabled
         col = (90, 140, 240) if hover else ((60, 100, 190) if enabled else (50, 56, 70))
         pygame.draw.rect(surf, col, rect, border_radius=10)
-        draw_text(surf, text, 40, WHITE if enabled else GRAY, rect.center, shadow=enabled)
+        draw_text(surf, text, size, WHITE if enabled else GRAY, rect.center, shadow=enabled)
 
     def draw(self, surf):
         surf.fill(BG)
@@ -167,13 +178,18 @@ class Menu:
             pygame.draw.rect(surf, (18, 24, 36), box, border_radius=10)
             pygame.draw.rect(surf, YELLOW if self.focus == i else (80, 100, 140), box, 3, border_radius=10)
             color = DIFF_COLORS[self.diff] if kind == "diff" else WHITE
+            if kind == "addr" and not self.addr and not self.editing_text:
+                color = GRAY
             draw_text(surf, self.value_text(kind), 30 if kind == "addr" else 36, color, box.center)
             if kind == "addr":
+                self._arrow(surf, r, "COLAR", True, 22)
                 continue
             can_l, can_r = self.limits(kind)
             self._arrow(surf, l, "<", can_l)
             self._arrow(surf, r, ">", can_r)
         Button(start, self.start_label, (40, 160, 80)).draw(surf, focused=(self.focus == len(self.rows)))
+        if self.mode >= 2:
+            draw_text(surf, "Online: só funciona com os dois na MESMA rede Wi-Fi", 24, YELLOW, (WIDTH // 2, 602))
         hint = ("Toque nas setas para ajustar" if MOBILE else
                 "Mouse ou setas para ajustar  |  ENTER inicia  |  Máx. 1 giro por chute (sem roletão)")
         draw_text(surf, hint, 22, GRAY, (WIDTH // 2, 668))

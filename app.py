@@ -10,7 +10,8 @@ from ui import draw_text, dim, Button
 from menu import Menu
 from game import Match
 from sound import Sound
-from net import Listener, Connector, local_ip
+from net import Listener, Connector, RelayHost, RelayJoin, is_room_code, local_ip
+import clip
 from touch import TouchControls
 
 UP_KEYS = (pygame.K_w, pygame.K_UP)
@@ -57,6 +58,10 @@ class App:
         self.msg, self.msg_t = "", 0.0
         self.lobby_t = 0.0
         self.my_ip = ""
+        self.code_rect = pygame.Rect(0, 0, 0, 0)    # área clicável do código/endereço (copiar)
+        self.copied_t = 0.0
+        self.copy_ok = True
+        self.join_wait = 0.0
         self.btn_continue = Button((350, 300, 300, 58), "CONTINUAR", (40, 160, 80))
         self.btn_pause_menu = Button((350, 375, 300, 58), "VOLTAR AO MENU", (170, 70, 70))
         self.btn_replay = Button((330, 470, 340, 60), "REJOGAR", (40, 160, 80))
@@ -75,16 +80,29 @@ class App:
         elif m.mode == 2:
             self.role = "host"
             self.config = (m.rounds, m.points)
-            self.listener = Listener(NET_PORT)
-            if self.listener.error:
-                self.leave(self.listener.error)
-                return
-            self.my_ip = local_ip()
-            self.state, self.lobby_t = "lobby", 0.0
+            if RELAY_SERVER:                            # sala por código (qualquer internet)
+                self.listener = RelayHost(RELAY_SERVER)
+            else:                                       # sem servidor: modo direto ip:porta
+                self.listener = Listener(NET_PORT)
+                if self.listener.error:
+                    self.leave(self.listener.error)
+                    return
+                self.my_ip = local_ip()
+            self.state, self.lobby_t, self.copied_t = "lobby", 0.0, 0.0
         else:
+            code = m.addr.strip()
+            if not code:
+                self.msg, self.msg_t = "Digite o código da sala (ou cole com COLAR).", 5.0
+                return
+            if is_room_code(code):
+                if not RELAY_SERVER:
+                    self.msg, self.msg_t = "Código de sala precisa do servidor online (veja o README).", 6.0
+                    return
+                self.connector = RelayJoin(RELAY_SERVER, code)
+            else:
+                self.connector = Connector(code, NET_PORT)
             self.role = "client"
-            self.connector = Connector(m.addr, NET_PORT)
-            self.state, self.lobby_t = "lobby", 0.0
+            self.state, self.lobby_t, self.join_wait = "lobby", 0.0, 0.0
 
     def setup_touch(self, mt, team):
         """Celular: o time `team` é controlado pelos botões da tela (não pelo teclado)."""
@@ -132,6 +150,10 @@ class App:
         elif self.state == "lobby":
             if self.btn_cancel.clicked(e) or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
                 self.leave()
+            elif (e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and self.role == "host"
+                  and self.code_rect.collidepoint(e.pos)):
+                self.copy_ok = clip.copy(self.listener.code or f"{self.my_ip}:{NET_PORT}")
+                self.copied_t = 2.5
         elif self.state == "game":
             if e.type == pygame.KEYDOWN and e.key in (pygame.K_ESCAPE, pygame.K_p):
                 self.paused = not self.paused
@@ -238,6 +260,7 @@ class App:
     # ------------------------------------------------------------ atualização
     def update(self, dt):
         self.msg_t = max(0.0, self.msg_t - dt)
+        self.copied_t = max(0.0, self.copied_t - dt)
         self.apply_touch()
         if MOBILE:                                 # teclado virtual só quando o campo de endereço está em foco
             want = self.state == "menu" and self.menu.editing_text
@@ -259,6 +282,9 @@ class App:
     def update_lobby(self, dt):
         self.lobby_t += dt
         if self.role == "host":
+            if self.listener.error:
+                self.leave(self.listener.error)
+                return
             if self.listener.peer is not None:
                 self.peer = self.listener.peer
                 self.listener.close()
@@ -271,12 +297,13 @@ class App:
                 self.leave(self.connector.error)
             elif self.connector.done:
                 self.peer = self.peer or self.connector.peer
+                self.join_wait += dt
                 for msg in self.peer.poll():
                     if msg.get("t") == "start":
                         self.match = self.make_view_match(int(msg.get("rounds", 3)), int(msg.get("points", 3)))
                         self.state, self.paused = "game", False
                         return
-                if self.peer.timed_out() or self.lobby_t > 15:
+                if self.peer.timed_out() or self.join_wait > 15:
                     self.leave("O host não respondeu.")
 
     def update_host(self, dt):
@@ -326,23 +353,48 @@ class App:
     # ---------------------------------------------------------------- desenho
     def draw_lobby(self, s):
         s.fill(BG)
+        dots = "." * (int(self.lobby_t * 2) % 4)
         if self.role == "host":
-            dots = "." * (int(self.lobby_t * 2) % 4)
-            draw_text(s, "AGUARDANDO O OUTRO JOGADOR" + dots, 56, YELLOW, (WIDTH // 2, 120))
-            draw_text(s, "Seu endereço (rede local ou VPN):", 32, LIGHT, (WIDTH // 2, 220))
-            draw_text(s, f"{self.my_ip}:{NET_PORT}", 80, WHITE, (WIDTH // 2, 290))
-            lines = ["Passe esse endereço para o amigo e peça para ele escolher",
-                     "'Online: entrar na sala' no menu.",
-                     "Mesmo Wi-Fi: já funciona. Internet: use uma VPN (Radmin, ZeroTier, Tailscale)",
-                     f"ou libere a porta TCP {NET_PORT} no roteador e passe o seu IP público.",
-                     "Se o Windows perguntar sobre o Firewall, clique em Permitir."]
-            for i, t in enumerate(lines):
-                draw_text(s, t, 26, GRAY, (WIDTH // 2, 380 + i * 34))
+            draw_text(s, "AGUARDANDO O OUTRO JOGADOR" + dots, 52, YELLOW, (WIDTH // 2, 100))
+            code = getattr(self.listener, "code", "")
+            if RELAY_SERVER:
+                if code:
+                    draw_text(s, "CÓDIGO DA SALA", 34, LIGHT, (WIDTH // 2, 200))
+                    r = draw_text(s, "  ".join(code), 130, WHITE, (WIDTH // 2, 290))
+                    self.code_rect = r.inflate(60, 40)
+                    pygame.draw.rect(s, YELLOW if self.copied_t > 0 else (80, 100, 140), self.code_rect, 3,
+                                     border_radius=18)
+                    if self.copied_t > 0:
+                        msg, col = (("COPIADO!", (90, 220, 120)) if self.copy_ok
+                                    else ("Não consegui copiar - anote o código", (255, 120, 120)))
+                    else:
+                        msg, col = "Toque no código para copiar", GRAY
+                    draw_text(s, msg, 28, col, (WIDTH // 2, 385))
+                    for i, t in enumerate(["Passe o código para o amigo.",
+                                           "Ele escolhe 'Online: entrar na sala' e digita o código.",
+                                           "Funciona em qualquer internet (Wi-Fi, 4G, outro país)."]):
+                        draw_text(s, t, 26, GRAY, (WIDTH // 2, 450 + i * 34))
+                else:
+                    draw_text(s, "Criando a sala" + dots, 48, WHITE, (WIDTH // 2, 260))
+                    draw_text(s, self.listener.status, 26, GRAY, (WIDTH // 2, 330))
+            else:
+                draw_text(s, "Seu endereço (rede local ou VPN):", 32, LIGHT, (WIDTH // 2, 200))
+                r = draw_text(s, f"{self.my_ip}:{NET_PORT}", 80, WHITE, (WIDTH // 2, 270))
+                self.code_rect = r.inflate(60, 30)
+                pygame.draw.rect(s, YELLOW if self.copied_t > 0 else (80, 100, 140), self.code_rect, 3, border_radius=18)
+                draw_text(s, "COPIADO!" if (self.copied_t > 0 and self.copy_ok) else "Toque no endereço para copiar",
+                          26, (90, 220, 120) if self.copied_t > 0 else GRAY, (WIDTH // 2, 345))
+                lines = ["Servidor online não configurado: só funciona no mesmo Wi-Fi ou com VPN",
+                         "(Radmin, ZeroTier, Tailscale) / porta TCP liberada no roteador.",
+                         "Para jogar em qualquer internet com código de sala, configure o relay (README).",
+                         "Se o Windows perguntar sobre o Firewall, clique em Permitir."]
+                for i, t in enumerate(lines):
+                    draw_text(s, t, 24, GRAY, (WIDTH // 2, 410 + i * 32))
         else:
-            dots = "." * (int(self.lobby_t * 2) % 4)
-            draw_text(s, "CONECTANDO" + dots, 64, YELLOW, (WIDTH // 2, 250))
-            draw_text(s, self.menu.addr, 40, WHITE, (WIDTH // 2, 330))
-            draw_text(s, "Aguardando o host iniciar a partida.", 28, GRAY, (WIDTH // 2, 400))
+            draw_text(s, "ENTRANDO NA SALA" + dots, 60, YELLOW, (WIDTH // 2, 230))
+            draw_text(s, self.menu.addr, 70, WHITE, (WIDTH // 2, 320))
+            status = self.connector.status if not self.connector.done else "Aguardando o host iniciar a partida."
+            draw_text(s, status, 26, GRAY, (WIDTH // 2, 400))
         self.btn_cancel.draw(s)
 
     def draw(self):
