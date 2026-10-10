@@ -145,5 +145,5 @@ NET_PORT = 5555
 #   Render/web:   "wss://meu-relay.onrender.com"
 #   TCP puro:     "meu-servidor.exemplo.com:5555"
 # Vazio = o jogo usa só o modo direto (IP:porta, mesma rede ou VPN).
-RELAY_SERVER = os.environ.get("PEBOLIM_RELAY", "")
+RELAY_SERVER = os.environ.get("wss://pebolim-arcade.onrender.com", "")
 NET_TIMEOUT = 5.0     # segundos sem receber nada = desconectado
