@@ -1,2 +1,3 @@
 # Endereço do servidor online (relay). Coloque em UMA linha, sem aspas. Exemplo:
 # wss://pebolim-arcade.onrender.com
+wss://pebolim-arcade.onrender.com
