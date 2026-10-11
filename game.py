@@ -59,6 +59,7 @@ class Match:
         self.lat = None                        # online: atraso total host<->cliente (ms)
         self.pred = None                       # online (convidado): predição da haste própria
         self.srv_off = [0.0] * len(self.rods)  # online: última posição das hastes enviada pelo host
+        self.kick_pred = None                  # online (convidado): chute previsto {ri, sh, up, age}
         self.sel_lock = 0.0                    # online: segundos em que a seleção local vale mais que a do host
         self.key_names = (["C", "SHIFT"], ["W/S", "SETAS"], ["ESPAÇO", "ENTER"]) if mode == "pvp" else \
                          (["C", ""], ["W/S ou SETAS", ""], ["ESPAÇO", ""])
@@ -278,6 +279,44 @@ class Match:
         if act in ("left", "right") or act.startswith("sel:"):
             self.do_action(t, act)
             self.sel_lock = (self.lat or 0) / 1000.0 + 0.3
+
+    def predict_kick(self, down):
+        """Convidado: o boneco começa a carregar/chutar na hora do toque; a bola continua sendo do host."""
+        t = self.view_team
+        if t is None or self.phase != "play":
+            return
+        kp = self.kick_pred
+        if down:
+            if kp is not None or self.charging[t] is not None or self.frozen(t):
+                return
+            c = self.ctrl[t]
+            rod = c["rod"] if c else self.selected(t)
+            if rod.state != IDLE or rod.cool > 0:
+                return
+            sh = Rod(rod.team, rod.kind, rod.x)
+            sh.offset, sh.foot = rod.offset, rod.foot
+            sh.start_charge()
+            self.kick_pred = {"ri": self.rods.index(rod), "sh": sh, "up": False, "age": 0.0}
+        elif kp is not None and not kp["up"]:
+            if kp["sh"].release():
+                kp["up"] = True
+            else:
+                self.kick_pred = None
+
+    def predict_kick_step(self, dt):
+        kp = self.kick_pred
+        if kp is None:
+            return
+        t = self.view_team
+        sh, rod = kp["sh"], self.rods[kp["ri"]]
+        kp["age"] += dt
+        if self.phase != "play" or kp["age"] > 4.0 or (sh.state == IDLE and sh.cool <= 0 and kp["age"] > 0.1):
+            self.kick_pred = None
+            return
+        sh.update(dt)
+        rod.foot, rod.state, rod.charge, rod.cool = sh.foot, sh.state, sh.charge, sh.cool
+        if sh.state == CHARGING and t is not None:
+            self.charging[t] = rod
 
     def predict_step(self, dt, axis):
         """Convidado: move a haste própria já no próprio aparelho, com a mesma física do host.

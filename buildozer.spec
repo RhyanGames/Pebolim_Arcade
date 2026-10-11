@@ -7,7 +7,7 @@ source.include_exts = py,png
 icon.filename = %(source.dir)s/assets/icon.png
 presplash.filename = %(source.dir)s/assets/presplash.png
 android.presplash_color = #0C2D51
-version = 0.1.1
+version = 0.2.0
 requirements = python3==3.10.12,hostpython3==3.10.12,pygame,openssl
 orientation = landscape
 fullscreen = 1

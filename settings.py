@@ -12,7 +12,7 @@ PAD = 200 if MOBILE else 0                 # painéis de controle dos lados do c
 LW, LH = WIDTH + 2 * PAD, HEIGHT           # tamanho total da tela lógica
 FPS = 60
 TITLE = "Pebolim Arcade"
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 CREDIT = "By Rhyan (EsnorQGames)"
 
 

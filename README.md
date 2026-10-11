@@ -83,3 +83,7 @@ Sem `RELAY_SERVER` preenchido, o jogo continua com o modo direto (`ip:porta`, me
 ### Endereço do relay sem gerar o .exe de novo
 Crie/edite o arquivo `relay.txt` (na mesma pasta do `PebolimArcade.exe`) com UMA linha: `wss://seu-app.onrender.com`.
 O jogo lê esse arquivo ao abrir. No menu, em "Online: criar sala", aparece "Código de sala via ..." quando o endereço foi encontrado.
+
+
+## Versões
+Veja o `CHANGELOG.md`. Formato MAJOR.MINOR.PATCH: funcionalidade nova sobe o MINOR, correção de bug sobe o PATCH, e sem mudança a versão não muda. Atualize `VERSION` em `settings.py` e `version` no `buildozer.spec` juntos.
