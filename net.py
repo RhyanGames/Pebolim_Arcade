@@ -66,6 +66,19 @@ class Peer:
             self.alive = False
             return False
 
+    def ping(self):
+        """Pede ao servidor uma resposta (só existe em conexões WebSocket)."""
+        f = getattr(self.sock, "ping", None)
+        if f:
+            try:
+                f()
+            except OSError:
+                pass
+
+    def rtt(self):
+        """Ping (ms) até o servidor, ou None se a conexão não mede isso."""
+        return getattr(self.sock, "rtt_ms", None)
+
     def poll(self):
         out = []
         while True:
@@ -211,7 +224,11 @@ class WSSock:
         self.rawbuf = bytearray(leftover)
         self.buf = bytearray()
         self.closed = False
+        self.rtt_ms = None                      # ping até o servidor (resposta ao ping WebSocket)
         self.wlock = threading.Lock()
+
+    def ping(self):
+        self._send_frame(9, struct.pack(">d", time.monotonic()))
 
     def settimeout(self, t):
         self.raw.settimeout(t)
@@ -283,6 +300,10 @@ class WSSock:
                 return b""
             elif op == 9:
                 self._send_frame(10, data)
+            elif op == 10 and len(data) == 8:
+                ms = (time.monotonic() - struct.unpack(">d", data)[0]) * 1000.0
+                if 0 <= ms < 60000:
+                    self.rtt_ms = ms if self.rtt_ms is None else self.rtt_ms * 0.6 + ms * 0.4
         out = bytes(self.buf[:n])
         del self.buf[:n]
         return out

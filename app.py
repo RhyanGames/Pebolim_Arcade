@@ -1,5 +1,6 @@
 """Pebolim Arcade - o jogo em si. O ponto de entrada é o main.py (que mostra erros na tela)."""
 import sys
+import time
 import pygame
 
 pygame.mixer.pre_init(22050, -16, 1, 512)
@@ -67,6 +68,9 @@ class App:
         self.copied_t = 0.0
         self.copy_ok = True
         self.join_wait = 0.0
+        self.ping_t = 0.0
+        self.e2e = None                 # atraso total host<->cliente (ms), medido por ping/pong do jogo
+        self.client_ping = None
         self.btn_continue = Button((350, 300, 300, 58), "CONTINUAR", (40, 160, 80))
         self.btn_pause_menu = Button((350, 375, 300, 58), "VOLTAR AO MENU", (170, 70, 70))
         self.btn_replay = Button((330, 470, 340, 60), "REJOGAR", (40, 160, 80))
@@ -143,6 +147,7 @@ class App:
         if self.listener:
             self.listener.close()
         self.peer = self.listener = self.connector = None
+        self.e2e = self.client_ping = None
         self.role = "local"
         self.state, self.paused = "menu", False
         self.msg, self.msg_t = message, 6.0
@@ -311,10 +316,46 @@ class App:
                 if self.peer.timed_out() or self.join_wait > 15:
                     self.leave("O host não respondeu.")
 
+    # ---------------------------------------------------------------- ping
+    def net_tick(self, dt):
+        """1x por segundo: mede o ping (até o servidor e de ponta a ponta)."""
+        self.ping_t -= dt
+        if self.ping_t <= 0:
+            self.ping_t = 1.0
+            self.peer.ping()
+            self.peer.send({"t": "ping", "ts": time.time()})
+
+    def net_msg(self, msg):
+        """Trata ping/pong. Retorna True se a mensagem era dessas."""
+        t = msg.get("t")
+        if t == "ping":
+            self.peer.send({"t": "pong", "ts": msg.get("ts")})
+            return True
+        if t == "pong":
+            try:
+                ms = (time.time() - float(msg.get("ts"))) * 1000.0
+            except (TypeError, ValueError):
+                return True
+            if 0 <= ms < 60000:
+                self.e2e = ms if self.e2e is None else self.e2e * 0.6 + ms * 0.4
+            return True
+        return False
+
+    def own_ping(self):
+        """Ping deste jogador: até o servidor (WebSocket); sem servidor, o host é 0 e o cliente usa o atraso total."""
+        rtt = self.peer.rtt()
+        if rtt is not None:
+            return rtt
+        return 0.0 if self.role == "host" else self.e2e
+
     def update_host(self, dt):
+        self.net_tick(dt)
         for msg in self.peer.poll():
             t = msg.get("t")
+            if self.net_msg(msg):
+                continue
             if t == "in":
+                self.client_ping = msg.get("pg")
                 self.match.set_axis(1, msg.get("m", 0))
             elif t == "act":
                 self.match.do_action(1, str(msg.get("a", "")))
@@ -326,13 +367,18 @@ class App:
             if self.match.finished:
                 self.state = "over"
                 self.sound.play("win")
+        self.match.ping = [self.own_ping(), self.client_ping]
+        self.match.lat = self.e2e
         if not self.peer.send(self.match.snapshot()) or self.peer.timed_out():
             self.leave("O outro jogador desconectou.")
 
     def update_client(self, dt):
+        self.net_tick(dt)
         latest = None
         for msg in self.peer.poll():
             t = msg.get("t")
+            if self.net_msg(msg):
+                continue
             if t == "snap":
                 latest = msg
             elif t == "start":                      # revanche
@@ -344,6 +390,10 @@ class App:
                 return
         if latest:
             self.match.apply_snapshot(latest)
+            own = self.own_ping()
+            if own is not None:
+                self.match.ping[1] = own
+            self.match.lat = self.e2e
             if self.match.finished and self.state == "game":
                 self.state = "over"
                 self.sound.play("win")
@@ -351,7 +401,8 @@ class App:
         axis = (1 if any(keys[k] for k in DOWN_KEYS) else 0) - (1 if any(keys[k] for k in UP_KEYS) else 0)
         if MOBILE:
             axis = self.touch.axis
-        self.peer.send({"t": "in", "m": axis})
+        own = self.own_ping()
+        self.peer.send({"t": "in", "m": axis, "pg": None if own is None else int(own)})
         if self.peer.timed_out():
             self.leave("Conexão com o host perdida.")
 

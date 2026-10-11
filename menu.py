@@ -58,7 +58,7 @@ class Menu:
     def note(self):
         """Aviso curto sobre o modo online (aparece abaixo do botão)."""
         if self.mode == 2:
-            return ("Você recebe um CÓDIGO para passar ao amigo (qualquer internet)" if RELAY_SERVER
+            return ("Código de sala via " + RELAY_SERVER.replace("wss://", "").replace("ws://", "")[:34] if RELAY_SERVER
                     else "Servidor online não configurado: só mesma rede Wi-Fi / VPN")
         if self.mode == 3:
             return "Digite o código que o amigo passou"

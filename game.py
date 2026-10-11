@@ -55,6 +55,8 @@ class Match:
         self.hints = True                      # dicas de teclado no rodapé (desligadas no celular)
         self.view_team = None                  # online: de qual time é a visão (esconde mira/dicas do outro)
         self.events = []                       # sons para enviar ao cliente online
+        self.ping = [None, None]               # online: ping (ms) de cada jogador
+        self.lat = None                        # online: atraso total host<->cliente (ms)
         self.key_names = (["C", "SHIFT"], ["W/S", "SETAS"], ["ESPAÇO", "ENTER"]) if mode == "pvp" else \
                          (["C", ""], ["W/S ou SETAS", ""], ["ESPAÇO", ""])
 
@@ -237,7 +239,7 @@ class Match:
                 "sel": self.sel_idx, "iz": self.in_zone, "cd": [round(x, 2) for x in self.ctrl_cd],
                 "ctrl": ctrl,
                 "chg": [None if r is None else self.rods.index(r) for r in self.charging],
-                "ev": self.events}
+                "pg": self.ping, "ev": self.events}
         self.events = []
         return snap
 
@@ -255,6 +257,7 @@ class Match:
         self.ctrl = [None if c is None else {"rod": self.rods[c[0]], "i": c[1], "aim": c[2], "t": c[3], "rel": c[4]}
                      for c in s["ctrl"]]
         self.charging = [None if i is None else self.rods[i] for i in s["chg"]]
+        self.ping = list(s.get("pg") or [None, None])
         for name in s.get("ev", []):
             if self.sound:
                 self.sound.play(name)
@@ -793,8 +796,24 @@ class Match:
             self._hud_key, self._hud_surf = key, s
         return self._hud_surf
 
+    @staticmethod
+    def ping_color(ms):
+        return (90, 220, 120) if ms < 70 else ((255, 214, 64) if ms < 140 else (255, 90, 90))
+
+    def draw_ping(self, surf):
+        """Online: ping de cada jogador (cantos) e atraso total da partida (centro)."""
+        for t, x, anchor in ((0, 30, "midleft"), (1, WIDTH - 30, "midright")):
+            ms = self.ping[t]
+            if ms is not None:
+                draw_text(surf, f"PING {int(round(ms))} ms", 20, self.ping_color(ms), (x, 99), anchor)
+        if self.lat is not None:
+            draw_text(surf, f"Atraso da partida: {int(round(self.lat))} ms", 18, self.ping_color(self.lat),
+                      (WIDTH // 2, 99))
+
     def draw_hud(self, surf):
         surf.blit(self._hud_top(), (0, 0))
+        if self.view_team is not None:
+            self.draw_ping(surf)
         # barras de força
         for t, x in ((0, 60), (1, 540)):
             rect = pygame.Rect(x, 636, 400, 24)

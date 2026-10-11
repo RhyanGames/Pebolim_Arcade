@@ -79,3 +79,7 @@ O relay precisa ficar **ligado numa máquina com endereço público** (você hos
    O amigo escolhe **Online: entrar na sala**, digita (ou toca em **COLAR**) e entra.
 
 Sem `RELAY_SERVER` preenchido, o jogo continua com o modo direto (`ip:porta`, mesma rede / VPN).
+
+### Endereço do relay sem gerar o .exe de novo
+Crie/edite o arquivo `relay.txt` (na mesma pasta do `PebolimArcade.exe`) com UMA linha: `wss://seu-app.onrender.com`.
+O jogo lê esse arquivo ao abrir. No menu, em "Online: criar sala", aparece "Código de sala via ..." quando o endereço foi encontrado.
