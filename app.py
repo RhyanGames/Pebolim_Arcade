@@ -253,6 +253,7 @@ class App:
                 return
             if self.role == "client":
                 self.peer.send({"t": "act", "a": a})
+                self.match.predict_act(a)
             else:
                 self.match.do_action(0, a)
         if self.role != "client":
@@ -264,6 +265,7 @@ class App:
                 self.peer.send({"t": "act", "a": "kick_down"})
             elif e.key in ACT_KEYS:
                 self.peer.send({"t": "act", "a": ACT_KEYS[e.key]})
+                self.match.predict_act(ACT_KEYS[e.key])
         elif e.type == pygame.KEYUP and e.key in KICK_KEYS:
             self.peer.send({"t": "act", "a": "kick_up"})
 
@@ -401,6 +403,8 @@ class App:
         axis = (1 if any(keys[k] for k in DOWN_KEYS) else 0) - (1 if any(keys[k] for k in UP_KEYS) else 0)
         if MOBILE:
             axis = self.touch.axis
+        if self.state == "game" and not self.paused:
+            self.match.predict_step(dt, axis)
         own = self.own_ping()
         self.peer.send({"t": "in", "m": axis, "pg": None if own is None else int(own)})
         if self.peer.timed_out():

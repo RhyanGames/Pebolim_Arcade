@@ -4,7 +4,7 @@ import random
 import pygame
 
 from settings import *
-from entities import Ball, Rod, IDLE, CHARGING, SWING, RETURN, level_from_charge
+from entities import Ball, Rod, IDLE, CHARGING, SWING, RETURN, level_from_charge, approach
 from ai import AIController
 from ui import draw_text
 
@@ -57,6 +57,9 @@ class Match:
         self.events = []                       # sons para enviar ao cliente online
         self.ping = [None, None]               # online: ping (ms) de cada jogador
         self.lat = None                        # online: atraso total host<->cliente (ms)
+        self.pred = None                       # online (convidado): predição da haste própria
+        self.srv_off = [0.0] * len(self.rods)  # online: última posição das hastes enviada pelo host
+        self.sel_lock = 0.0                    # online: segundos em que a seleção local vale mais que a do host
         self.key_names = (["C", "SHIFT"], ["W/S", "SETAS"], ["ESPAÇO", "ENTER"]) if mode == "pvp" else \
                          (["C", ""], ["W/S ou SETAS", ""], ["ESPAÇO", ""])
 
@@ -251,9 +254,13 @@ class Match:
         self.round_winner, self.finished = s["rwn"], s["fin"]
         b = self.ball
         b.x, b.y, b.vx, b.vy = s["b"]
-        for r, (off, foot, st, ch, cool) in zip(self.rods, s["r"]):
+        for k, (r, (off, foot, st, ch, cool)) in enumerate(zip(self.rods, s["r"])):
             r.offset, r.foot, r.state, r.charge, r.cool = off, foot, st, ch, cool
+            self.srv_off[k] = off
+        mine = None if self.view_team is None else self.sel_idx[self.view_team]
         self.sel_idx, self.in_zone, self.ctrl_cd = list(s["sel"]), list(s["iz"]), list(s["cd"])
+        if mine is not None and self.sel_lock > 0:          # acabei de trocar de haste: o snapshot ainda é velho
+            self.sel_idx[self.view_team] = mine
         self.ctrl = [None if c is None else {"rod": self.rods[c[0]], "i": c[1], "aim": c[2], "t": c[3], "rel": c[4]}
                      for c in s["ctrl"]]
         self.charging = [None if i is None else self.rods[i] for i in s["chg"]]
@@ -261,6 +268,48 @@ class Match:
         for name in s.get("ev", []):
             if self.sound:
                 self.sound.play(name)
+
+    # ------------------------------------------------- predição (convidado)
+    def predict_act(self, act):
+        """Convidado: troca de haste aparece na hora (o host confirma depois)."""
+        t = self.view_team
+        if t is None or self.ctrl[t] is not None:
+            return
+        if act in ("left", "right") or act.startswith("sel:"):
+            self.do_action(t, act)
+            self.sel_lock = (self.lat or 0) / 1000.0 + 0.3
+
+    def predict_step(self, dt, axis):
+        """Convidado: move a haste própria já no próprio aparelho, com a mesma física do host.
+        A posição enviada pelo host só corrige a diferença quando o jogador para de mexer."""
+        t = self.view_team
+        if t is None:
+            return
+        self.sel_lock = max(0.0, self.sel_lock - dt)
+        rod = self.selected(t)
+        ri = self.rods.index(rod)
+        srv = self.srv_off[ri]
+        p = self.pred
+        if p is None or p["ri"] != ri:
+            p = self.pred = {"ri": ri, "off": srv, "vy": 0.0, "quiet": 0.0}
+        lat = (self.lat or 0.0) / 1000.0
+        if self.phase != "play" or not self.human[t] or self.frozen(t) or self.ctrl[t] is not None:
+            p["off"], p["vy"], p["quiet"] = srv, 0.0, 0.0
+        else:
+            p["vy"] = approach(p["vy"], axis * ROD_SPEED, ROD_ACCEL * dt)
+            new = p["off"] + p["vy"] * dt
+            if new > rod.max_off:
+                new, p["vy"] = rod.max_off, 0.0
+            elif new < -rod.max_off:
+                new, p["vy"] = -rod.max_off, 0.0
+            p["off"] = new
+            p["quiet"] = 0.0 if axis else p["quiet"] + dt
+            err = srv - p["off"]
+            if p["quiet"] > lat + 0.25:                       # parou: o host já chegou, encaixa suave
+                p["off"] += err * min(1.0, dt * 10.0)
+            elif abs(err) > ROD_SPEED * (lat + 0.15) + 40:    # diferença grande demais: puxa de volta
+                p["off"] += err * min(1.0, dt * 3.0)
+        rod.offset = p["off"]
 
     # --------------------------------------------------- controle de bola
     def frozen(self, t):

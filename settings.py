@@ -168,6 +168,7 @@ def _read_relay():
     return ""
 
 
-RELAY_DEFAULT = "wss://pebolim-arcade.onrender.com"       # (opcional) escreva aqui o endereço, ex.: "wss://meu-relay.onrender.com"
-RELAY_SERVER =  RELAY_DEFAULT
+RELAY_DEFAULT = "wss://pebolim-arcade.onrender.com"
+RELAY_SERVER = RELAY_DEFAULT
+RELAY_SERVER = _read_relay() or RELAY_SERVER      # (opcional) PEBOLIM_RELAY ou relay.txt têm prioridade
 NET_TIMEOUT = 5.0     # segundos sem receber nada = desconectado
